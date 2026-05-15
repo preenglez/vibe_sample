@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable
+import public_search
 
 log = logging.getLogger(__name__)
 
@@ -69,12 +70,14 @@ class Watchlist:
                     log.exception("Watch check error: %s", e)
 
     async def _check(self, item: WatchItem):
-        client = self._korail if item.service == "KTX" else self._srt
-        if client is None:
+        # 조회는 공개 API (로그인 불필요)
+        search_fn = public_search.search_korail if item.service == "KTX" else public_search.search_srt
+        reserve_client = self._korail if item.service == "KTX" else self._srt
+        if reserve_client is None:
             return
 
         trains = await asyncio.get_event_loop().run_in_executor(
-            None, client.search_trains, item.dep, item.arr, item.date, item.time
+            None, search_fn, item.dep, item.arr, item.date, item.time
         )
 
         for t in trains:
@@ -88,7 +91,7 @@ class Watchlist:
             item.active = False  # 중복 예약 방지
 
             result = await asyncio.get_event_loop().run_in_executor(
-                None, client.reserve, t, item.seat_type
+                None, reserve_client.reserve, t, item.seat_type
             )
 
             if item.on_reserve:

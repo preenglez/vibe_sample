@@ -1,77 +1,50 @@
 from __future__ import annotations
 import logging
-from dataclasses import dataclass
 from typing import Optional
 from SRT import SRT
 from SRT.passenger import Adult
 from config import SRT_ID, SRT_PW, SRT_CARD_NUMBER, SRT_CARD_EXPIRY, SRT_CARD_BIRTH
+from public_search import TrainInfo
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class TrainInfo:
-    service: str  # "SRT"
-    train_no: str
-    dep_station: str
-    arr_station: str
-    dep_time: str
-    arr_time: str
-    date: str
-    duration: str
-    has_general: bool
-    has_special: bool
-    raw: object
 
 
 class SRTClient:
     def __init__(self):
         self._srt: Optional[SRT] = None
 
-    def _ensure_login(self):
+    def _ensure_login(self) -> SRT:
         if self._srt is None:
-            s = SRT(SRT_ID, SRT_PW)
-            self._srt = s
+            self._srt = SRT(SRT_ID, SRT_PW)
         return self._srt
 
-    def search_trains(self, dep: str, arr: str, date: str, time: str = "000000") -> list[TrainInfo]:
-        """date: YYYYMMDD, time: HHMMSS"""
-        s = self._ensure_login()
-        hhmm = time[:4]
-        trains = s.search_train(dep, arr, date, hhmm, available_only=False)
-        result = []
-        for t in trains:
-            dep_t = t.dep_time.replace(":", "")
-            arr_t = t.arr_time.replace(":", "")
-            info = TrainInfo(
-                service="SRT",
-                train_no=t.train_name + " " + t.train_number,
-                dep_station=t.dep_station_name,
-                arr_station=t.arr_station_name,
-                dep_time=t.dep_time[:5],
-                arr_time=t.arr_time[:5],
-                date=t.dep_date,
-                duration=self._calc_duration(dep_t, arr_t),
-                has_general=t.general_seat_available(),
-                has_special=t.special_seat_available(),
-                raw=t,
-            )
-            result.append(info)
-        return result
-
     def reserve(self, train_info: TrainInfo, seat_type: str = "general") -> dict:
+        """public_search.TrainInfo 를 받아서 SRT 라이브러리로 재검색 후 예약."""
         s = self._ensure_login()
-        t = train_info.raw
         try:
-            if seat_type == "special":
-                reservation = s.reserve(t, passengers=[Adult()], special_seat=True)
-            else:
-                reservation = s.reserve(t, passengers=[Adult()])
+            trains = s.search_train(
+                train_info.dep_station,
+                train_info.arr_station,
+                train_info.date,
+                train_info.dep_time.replace(":", ""),
+                available_only=False,
+            )
+            target = next(
+                (t for t in trains if t.train_number in train_info.train_no), None
+            )
+            if target is None:
+                return {"success": False, "error": "열차를 찾을 수 없습니다."}
+
+            rsv = s.reserve(
+                target,
+                passengers=[Adult()],
+                special_seat=(seat_type == "special"),
+            )
             return {
                 "success": True,
-                "rsv_no": reservation.reservation_number,
-                "total_price": reservation.total_cost,
-                "pay_limit_time": reservation.pay_limit_date,
+                "rsv_no": rsv.reservation_number,
+                "total_price": rsv.total_cost,
+                "pay_limit_time": rsv.pay_limit_date,
             }
         except Exception as e:
             log.warning("SRT reserve failed: %s", e)
@@ -94,11 +67,3 @@ class SRTClient:
         except Exception as e:
             log.warning("SRT pay failed: %s", e)
             return {"success": False, "error": str(e)}
-
-    def _calc_duration(self, dep: str, arr: str) -> str:
-        dh, dm = int(dep[:2]), int(dep[2:4])
-        ah, am = int(arr[:2]), int(arr[2:4])
-        total = (ah * 60 + am) - (dh * 60 + dm)
-        if total < 0:
-            total += 1440
-        return f"{total // 60}h {total % 60}m"

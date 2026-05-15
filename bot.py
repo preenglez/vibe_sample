@@ -15,6 +15,7 @@ from config import (
 from korail_client import KorailClient
 from srt_client import SRTClient
 from watchlist import Watchlist, WatchItem
+import public_search
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -168,10 +169,11 @@ async def cb_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text("🔍 열차를 조회하는 중...")
 
-    client = korail if svc == "KTX" else srt
+    # 조회는 로그인 없이 공개 API 사용
+    search_fn = public_search.search_korail if svc == "KTX" else public_search.search_srt
     try:
         trains = await asyncio.get_event_loop().run_in_executor(
-            None, client.search_trains, dep, arr, date, time
+            None, search_fn, dep, arr, date, time
         )
     except Exception as e:
         await q.edit_message_text(f"조회 실패: {e}\n/start 로 다시 시도하세요.")
@@ -242,6 +244,15 @@ async def cb_seat_type(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     ctx.user_data["seat_type"] = data
     train = ctx.user_data["selected_train"]
+    svc = ctx.user_data["service"]
+
+    # 예약 전 로그인 계정 확인
+    has_credentials = (svc == "KTX" and korail) or (svc == "SRT" and srt)
+    if not has_credentials:
+        await q.edit_message_text(
+            f"ℹ️ 열차 조회는 성공했으나 예약하려면 .env에 {svc} 계정 정보를 설정해야 합니다."
+        )
+        return ConversationHandler.END
 
     available = train.has_general if data == "general" else train.has_special
     if not available:
