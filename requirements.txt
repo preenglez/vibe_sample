@@ -1,6 +1,6 @@
 python-telegram-bot==20.7
-korail2==0.3.4
-SRT==0.3.0
+korail2==0.4.0
+SRT==3.5.3
 apscheduler==3.10.4
 python-dotenv==1.0.0
 requests>=2.31.0

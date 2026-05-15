@@ -445,8 +445,11 @@ def main():
     app.add_handler(CommandHandler("cancel_watch", cmd_cancel_watch))
     app.add_handler(MessageHandler(filters.Regex(r"^/pay_"), cmd_pay))
 
-    watchlist.start()
-    log.info("봇 시작됨")
+    async def on_startup(application):
+        watchlist.start()
+        log.info("봇 시작됨")
+
+    app.post_init = on_startup
     app.run_polling(drop_pending_updates=True)
 
 
