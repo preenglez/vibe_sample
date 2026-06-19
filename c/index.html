@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>화면 캡쳐 도구</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      background: linear-gradient(90deg, #4fc3f7, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: #888;
+      margin-bottom: 32px;
+      font-size: 0.9rem;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    button {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.2s;
+    }
+
+    button:active { transform: scale(0.97); }
+
+    #btn-full {
+      background: linear-gradient(135deg, #4fc3f7, #0288d1);
+      color: #fff;
+      box-shadow: 0 4px 20px #0288d144;
+    }
+
+    #btn-area {
+      background: linear-gradient(135deg, #a78bfa, #7c3aed);
+      color: #fff;
+      box-shadow: 0 4px 20px #7c3aed44;
+    }
+
+    #btn-download {
+      background: linear-gradient(135deg, #34d399, #059669);
+      color: #fff;
+      box-shadow: 0 4px 20px #05966944;
+      display: none;
+    }
+
+    #btn-reset {
+      background: #333;
+      color: #aaa;
+      display: none;
+    }
+
+    #status {
+      font-size: 0.9rem;
+      color: #aaa;
+      margin-bottom: 16px;
+      min-height: 1.4em;
+    }
+
+    #preview-wrap {
+      position: relative;
+      display: none;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 40px #0008;
+      max-width: 100%;
+    }
+
+    #preview {
+      display: block;
+      max-width: min(900px, 90vw);
+      max-height: 60vh;
+      object-fit: contain;
+      background: #000;
+    }
+
+    /* 영역 선택 오버레이 */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      cursor: crosshair;
+      z-index: 9999;
+      display: none;
+    }
+
+    #overlay canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    #overlay-hint {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #000c;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      z-index: 10000;
+      pointer-events: none;
+      display: none;
+    }
+
+    nav {
+      margin-top: 40px;
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    nav a { color: #4fc3f7; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>화면 캡쳐 도구</h1>
+  <p class="subtitle">브라우저의 화면 공유 기능을 이용해 캡쳐합니다</p>
+
+  <div class="btn-group">
+    <button id="btn-full">전체 화면 캡쳐</button>
+    <button id="btn-area">영역 선택 캡쳐</button>
+    <button id="btn-download">이미지 저장</button>
+    <button id="btn-reset">다시 시작</button>
+  </div>
+
+  <div id="status">캡쳐 버튼을 눌러 시작하세요.</div>
+
+  <div id="preview-wrap">
+    <canvas id="preview"></canvas>
+  </div>
+
+  <!-- 영역 선택 오버레이 -->
+  <div id="overlay">
+    <canvas id="sel-canvas"></canvas>
+  </div>
+  <div id="overlay-hint">드래그로 캡쳐할 영역을 선택하세요 &nbsp;·&nbsp; ESC: 취소</div>
+
+  <nav><a href="../">← 메인으로</a></nav>
+
+  <script>
+    const btnFull = document.getElementById('btn-full');
+    const btnArea = document.getElementById('btn-area');
+    const btnDownload = document.getElementById('btn-download');
+    const btnReset = document.getElementById('btn-reset');
+    const status = document.getElementById('status');
+    const previewWrap = document.getElementById('preview-wrap');
+    const preview = document.getElementById('preview');
+    const overlay = document.getElementById('overlay');
+    const selCanvas = document.getElementById('sel-canvas');
+    const overlayHint = document.getElementById('overlay-hint');
+
+    let capturedImageData = null; // DataURL of final image
+
+    // ── 공통: getDisplayMedia로 스트림 → 캔버스에 한 프레임 그리기 ──
+    async function captureScreen() {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: 'always' },
+        audio: false
+      });
+
+      return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play();
+          // 한 프레임 확보 후 캔버스에 그리기
+          requestAnimationFrame(() => {
+            const w = video.videoWidth;
+            const h = video.videoHeight;
+            const offscreen = document.createElement('canvas');
+            offscreen.width = w;
+            offscreen.height = h;
+            offscreen.getContext('2d').drawImage(video, 0, 0, w, h);
+            stream.getTracks().forEach(t => t.stop());
+            resolve(offscreen);
+          });
+        };
+        video.onerror = reject;
+        stream.getVideoTracks()[0].addEventListener('ended', () => {
+          reject(new Error('cancelled'));
+        });
+      });
+    }
+
+    // ── 전체 화면 캡쳐 ──
+    btnFull.addEventListener('click', async () => {
+      setStatus('화면을 선택하면 캡쳐가 시작됩니다...');
+      try {
+        const offscreen = await captureScreen();
+        showResult(offscreen);
+        setStatus('캡쳐 완료! 저장 버튼을 눌러 이미지를 다운로드하세요.');
+      } catch (e) {
+        if (e.message !== 'cancelled') {
+          setStatus('캡쳐에 실패했습니다: ' + e.message);
+        } else {
+          setStatus('캡쳐가 취소되었습니다.');
+        }
+      }
+    });
+
+    // ── 영역 선택 캡쳐 ──
+    btnArea.addEventListener('click', async () => {
+      setStatus('화면을 선택하면 캡쳐가 시작됩니다...');
+      try {
+        const offscreen = await captureScreen();
+        openSelectionOverlay(offscreen);
+      } catch (e) {
+        if (e.message !== 'cancelled') {
+          setStatus('캡쳐에 실패했습니다: ' + e.message);
+        } else {
+          setStatus('캡쳐가 취소되었습니다.');
+        }
+      }
+    });
+
+    // ── 영역 선택 UI ──
+    function openSelectionOverlay(srcCanvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+
+      selCanvas.width = W * dpr;
+      selCanvas.height = H * dpr;
+      selCanvas.style.width = W + 'px';
+      selCanvas.style.height = H + 'px';
+
+      const ctx = selCanvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      // 배경: 캡쳐 이미지를 화면에 맞게 그리기
+      function drawBackground() {
+        ctx.drawImage(srcCanvas, 0, 0, W, H);
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      overlay.style.display = 'block';
+      overlayHint.style.display = 'block';
+      drawBackground();
+
+      let startX, startY, isDragging = false;
+
+      function getPos(e) {
+        const r = selCanvas.getBoundingClientRect();
+        const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+        const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+        return [cx, cy];
+      }
+
+      function onDown(e) {
+        e.preventDefault();
+        [startX, startY] = getPos(e);
+        isDragging = true;
+      }
+
+      function onMove(e) {
+        if (!isDragging) return;
+        e.preventDefault();
+        const [cx, cy] = getPos(e);
+        drawBackground();
+
+        const rx = Math.min(startX, cx);
+        const ry = Math.min(startY, cy);
+        const rw = Math.abs(cx - startX);
+        const rh = Math.abs(cy - startY);
+
+        // 선택 영역은 원본 보이게
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,1)';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.restore();
+
+        // 다시 원본 이미지 클리어 영역에 그리기
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-over';
+        ctx.drawImage(srcCanvas, 0, 0, W, H);
+        ctx.restore();
+
+        // 테두리
+        ctx.strokeStyle = '#4fc3f7';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 3]);
+        ctx.strokeRect(rx, ry, rw, rh);
+
+        // 크기 표시
+        const scaleX = srcCanvas.width / W;
+        const scaleY = srcCanvas.height / H;
+        const label = `${Math.round(rw * scaleX)} × ${Math.round(rh * scaleY)} px`;
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#4fc3f7';
+        ctx.font = '13px sans-serif';
+        ctx.fillText(label, rx + 4, ry > 20 ? ry - 6 : ry + rh + 16);
+      }
+
+      function onUp(e) {
+        if (!isDragging) return;
+        isDragging = false;
+        const [cx, cy] = getPos(e);
+
+        const rx = Math.min(startX, cx);
+        const ry = Math.min(startY, cy);
+        const rw = Math.abs(cx - startX);
+        const rh = Math.abs(cy - startY);
+
+        closeOverlay();
+
+        if (rw < 4 || rh < 4) {
+          setStatus('너무 작은 영역입니다. 다시 시도하세요.');
+          return;
+        }
+
+        // 원본 캔버스 기준으로 비율 환산해서 크롭
+        const scaleX = srcCanvas.width / W;
+        const scaleY = srcCanvas.height / H;
+        const cropped = document.createElement('canvas');
+        cropped.width = Math.round(rw * scaleX);
+        cropped.height = Math.round(rh * scaleY);
+        cropped.getContext('2d').drawImage(
+          srcCanvas,
+          rx * scaleX, ry * scaleY, rw * scaleX, rh * scaleY,
+          0, 0, cropped.width, cropped.height
+        );
+
+        showResult(cropped);
+        setStatus('영역 캡쳐 완료! 저장 버튼을 눌러 이미지를 다운로드하세요.');
+      }
+
+      function onKey(e) {
+        if (e.key === 'Escape') {
+          closeOverlay();
+          setStatus('캡쳐가 취소되었습니다.');
+        }
+      }
+
+      selCanvas.addEventListener('mousedown', onDown);
+      selCanvas.addEventListener('mousemove', onMove);
+      selCanvas.addEventListener('mouseup', onUp);
+      selCanvas.addEventListener('touchstart', onDown, { passive: false });
+      selCanvas.addEventListener('touchmove', onMove, { passive: false });
+      selCanvas.addEventListener('touchend', onUp);
+      document.addEventListener('keydown', onKey);
+
+      function closeOverlay() {
+        overlay.style.display = 'none';
+        overlayHint.style.display = 'none';
+        selCanvas.removeEventListener('mousedown', onDown);
+        selCanvas.removeEventListener('mousemove', onMove);
+        selCanvas.removeEventListener('mouseup', onUp);
+        selCanvas.removeEventListener('touchstart', onDown);
+        selCanvas.removeEventListener('touchmove', onMove);
+        selCanvas.removeEventListener('touchend', onUp);
+        document.removeEventListener('keydown', onKey);
+      }
+    }
+
+    // ── 결과 표시 ──
+    function showResult(canvas) {
+      preview.width = canvas.width;
+      preview.height = canvas.height;
+      preview.getContext('2d').drawImage(canvas, 0, 0);
+      capturedImageData = canvas.toDataURL('image/png');
+
+      previewWrap.style.display = 'block';
+      btnDownload.style.display = '';
+      btnReset.style.display = '';
+    }
+
+    // ── 저장 ──
+    btnDownload.addEventListener('click', () => {
+      if (!capturedImageData) return;
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `capture-${ts}.png`;
+      a.href = capturedImageData;
+      a.click();
+    });
+
+    // ── 초기화 ──
+    btnReset.addEventListener('click', () => {
+      capturedImageData = null;
+      previewWrap.style.display = 'none';
+      btnDownload.style.display = 'none';
+      btnReset.style.display = 'none';
+      setStatus('캡쳐 버튼을 눌러 시작하세요.');
+    });
+
+    function setStatus(msg) { status.textContent = msg; }
+  </script>
+</body>
+</html>
